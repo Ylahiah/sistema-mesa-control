@@ -96,3 +96,37 @@ def update_qr_status(detail_ws, qr_data, new_status):
         return True, f"Estatus actualizado a {new_status}"
     except Exception as e:
         return False, f"Error actualizando QR: {e}"
+
+def delete_qr_scan(detail_ws, qr_data):
+    """
+    Deletes a specific QR record (soft delete or hard delete).
+    Here we'll do hard delete for simplicity in the list.
+    """
+    try:
+        cell = detail_ws.find(qr_data)
+        if not cell:
+            return False, "QR no encontrado para eliminar."
+        
+        detail_ws.delete_rows(cell.row)
+        return True, "Registro eliminado correctamente."
+    except Exception as e:
+        return False, f"Error eliminando registro: {e}"
+
+def get_folio_details(detail_ws, folio):
+    """
+    Retrieves all QR records associated with a specific Folio.
+    """
+    try:
+        # Get all records
+        all_records = detail_ws.get_all_records()
+        df = pd.DataFrame(all_records)
+        
+        if df.empty or "FOLIO_PADRE" not in df.columns:
+            return pd.DataFrame()
+            
+        # Filter by Folio (convert to string to be safe)
+        filtered_df = df[df["FOLIO_PADRE"].astype(str) == str(folio)]
+        return filtered_df
+    except Exception as e:
+        st.error(f"Error fetching details: {e}")
+        return pd.DataFrame()
