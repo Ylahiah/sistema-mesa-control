@@ -16,12 +16,8 @@ st.set_page_config(
 )
 
 # Constants
-ROLES = ["CAPTURISTA", "RESPONSABLE"]
 STATUS_OPTIONS_CAPTURISTA = ["SURTIDO", "CAPTURADO", "EN_VALIDACION", "DOC_LISTA"]
 STATUS_OPTIONS_RESPONSABLE = ["SURTIDO", "CAPTURADO", "EN_VALIDACION", "DOC_LISTA", "LIBERADO"]
-
-# Mock Users for simple authentication
-USERS = ["Admin", "Juan", "Maria", "Pedro", "Luisa"]
 
 def init_session_state():
     if "logged_in" not in st.session_state:
@@ -31,21 +27,64 @@ def init_session_state():
     if "role" not in st.session_state:
         st.session_state.role = None
 
+def get_users_list(client):
+    """Helper to get users list safely"""
+    ws = dm.get_or_create_users_worksheet(client)
+    if not ws: return []
+    return dm.get_all_users(ws)
+
 def login_page():
     st.title("📦 Control de Pickings - Acceso")
+    
+    # Connect to DB to fetch users
+    client = dm.get_gspread_client()
+    if not client:
+        st.error("Error de conexión. Verifica configuración.")
+        return
+
+    users_data = get_users_list(client)
+    if not users_data:
+        st.warning("No hay usuarios registrados.")
+        return
+        
+    # Prepare lists for dropdown
+    user_names = [u["USUARIO"] for u in users_data]
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
-            user = st.selectbox("Selecciona tu Usuario", USERS)
-            role = st.selectbox("Selecciona tu Rol", ROLES)
+            selected_user = st.selectbox("Selecciona tu Usuario", user_names)
+            
+            # Auto-select role based on user but allow override if needed (or readonly)
+            # Find role for selected user
+            # This is a bit tricky in Streamlit because selectbox doesn't return object.
+            # We can find it after selection, but to update the Role selectbox dynamically requires state or rerun.
+            # Simplest approach: Just let them select role, or validate it on submit.
+            # Better: Filter roles? Or just trust the sheet?
+            # Let's show the role associated in the sheet as a hint or default.
+            
+            # Since we can't easily dynamic update without rerun, we will just validate on submit
+            # OR we can just rely on the sheet's role!
+            # If I select "Juan", the system knows Juan is Capturista.
+            # User requirement: "aparezcan en la desplegable... estos deben tener relacion"
+            
+            # Let's purely rely on the sheet for the Role. User selects Name, System gets Role.
+            # But "Selector de rol" was a requirement in the first prompt. 
+            # However, managing users implies roles are assigned.
+            # Let's keep it simple: Select User -> System logs you in with your assigned role.
+            
             submitted = st.form_submit_button("Ingresar")
             
             if submitted:
-                st.session_state.logged_in = True
-                st.session_state.user = user
-                st.session_state.role = role
-                st.rerun()
+                # Find the user record
+                user_record = next((u for u in users_data if u["USUARIO"] == selected_user), None)
+                if user_record:
+                    st.session_state.logged_in = True
+                    st.session_state.user = user_record["USUARIO"]
+                    st.session_state.role = user_record["ROL"]
+                    st.rerun()
+                else:
+                    st.error("Error al identificar usuario.")
 
 def main_app():
     st.sidebar.title(f"Hola, {st.session_state.user}")
@@ -84,7 +123,11 @@ def main_app():
 def responsable_view(df, worksheet, detail_worksheet):
     st.title("Panel de Responsable")
     
-    tab1, tab2, tab3 = st.tabs(["📋 Gestión Operativa", "📤 Carga Masiva", "👥 Reasignación"])
+    # We need to access users worksheet for the new tab
+    client = dm.get_gspread_client()
+    users_ws = dm.get_or_create_users_worksheet(client)
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Gestión Operativa", "📤 Carga Masiva", "👥 Reasignación", "👤 Gestión Usuarios"])
     
     with tab1:
         st.subheader("Tablero General")
@@ -147,7 +190,12 @@ def responsable_view(df, worksheet, detail_worksheet):
         with c1:
             folio_to_assign = st.selectbox("Seleccionar Folio", df["FOLIO"].unique())
         with c2:
-            target_user = st.selectbox("Asignar a", USERS)
+            # Dynamic users list
+            current_users = get_users_list(client)
+            capturistas = [u["USUARIO"] for u in current_users if u["ROL"] == "CAPTURISTA"]
+            # Fallback if no capturistas
+            if not capturistas: capturistas = ["Sin Capturistas"]
+            target_user = st.selectbox("Asignar a", capturistas)
             
         if st.button("Reasignar"):
             success, msg = dm.reassign_capturista(worksheet, str(folio_to_assign), target_user, st.session_state.user)
@@ -157,6 +205,57 @@ def responsable_view(df, worksheet, detail_worksheet):
                 st.rerun()
             else:
                 st.error(msg)
+    
+    with tab4:
+        st.subheader("Gestión de Usuarios (Capturistas y Responsables)")
+        
+        # Add new user form
+        with st.form("add_user_form"):
+            c_new1, c_new2 = st.columns(2)
+            with c_new1:
+                new_user_name = st.text_input("Nombre de Usuario (Único)")
+            with c_new2:
+                new_user_role = st.selectbox("Rol", ["CAPTURISTA", "RESPONSABLE"])
+            
+            submit_user = st.form_submit_button("Crear Usuario")
+            if submit_user:
+                if new_user_name:
+                    success, msg = dm.add_user(users_ws, new_user_name, new_user_role)
+                    if success:
+                        st.success(msg)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                else:
+                    st.warning("El nombre es obligatorio")
+        
+        st.divider()
+        st.subheader("Lista de Usuarios")
+        
+        # Show users list with delete option
+        all_users = dm.get_all_users(users_ws)
+        if all_users:
+            users_df = pd.DataFrame(all_users)
+            
+            # Simple list
+            for idx, u in users_df.iterrows():
+                u_name = u["USUARIO"]
+                u_role = u["ROL"]
+                
+                col_u1, col_u2, col_u3 = st.columns([2, 2, 1])
+                with col_u1:
+                    st.write(f"**{u_name}**")
+                with col_u2:
+                    st.badge(u_role)
+                with col_u3:
+                    if u_name != "Admin":
+                        if st.button("Eliminar", key=f"del_user_{u_name}"):
+                            success, msg = dm.delete_user(users_ws, u_name)
+                            if success:
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
 def decode_image(image_file):
     """
