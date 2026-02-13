@@ -3,3 +3,6 @@ pandas
 gspread==5.12.4
 google-auth
 openpyxl
+opencv-python-headless
+numpy
+pyzbar
