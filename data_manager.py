@@ -16,6 +16,7 @@ REQUIRED_COLUMNS = [
     "ESTATUS", "FECHA_ULTIMO_EVENTO"
 ]
 
+@st.cache_resource
 def get_gspread_client():
     """
     Initializes and returns a gspread client using Streamlit secrets.
@@ -222,3 +223,71 @@ def reassign_capturista(worksheet, folio, new_capturista, user_name):
         
     except Exception as e:
         return False, f"Update failed: {e}"
+
+def get_or_create_users_worksheet(client):
+    """
+    Gets or creates the 'usuarios' worksheet.
+    """
+    sheet_name = "usuarios"
+    SPREADSHEET_NAME = "SISTEMA_PICKINGS_DB"
+    try:
+        sh = client.open(SPREADSHEET_NAME)
+        try:
+            worksheet = sh.worksheet(sheet_name)
+        except gspread.WorksheetNotFound:
+            worksheet = sh.add_worksheet(title=sheet_name, rows=100, cols=5)
+            # Default headers
+            worksheet.append_row(["USUARIO", "ROL", "FECHA_CREACION"])
+            # Default Admin user
+            worksheet.append_row(["Admin", "RESPONSABLE", datetime.now().strftime("%Y-%m-%d")])
+        return worksheet
+    except Exception as e:
+        st.error(f"Error accessing users worksheet: {e}")
+        return None
+
+def get_all_users(worksheet):
+    """
+    Returns a list of dictionaries with user info.
+    """
+    try:
+        records = worksheet.get_all_records()
+        if not records:
+             # Fallback if empty but header exists, though we create admin by default
+             return [{"USUARIO": "Admin", "ROL": "RESPONSABLE"}]
+        return records
+    except Exception as e:
+        st.error(f"Error reading users: {e}")
+        return []
+
+def add_user(worksheet, name, role):
+    """
+    Adds a new user to the system.
+    """
+    try:
+        # Simple check if user exists by name
+        cell = worksheet.find(name)
+        if cell:
+            return False, "El usuario ya existe."
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        worksheet.append_row([name, role, timestamp])
+        return True, "Usuario creado exitosamente."
+    except Exception as e:
+        return False, f"Error creando usuario: {e}"
+
+def delete_user(worksheet, name):
+    """
+    Deletes a user.
+    """
+    try:
+        if name == "Admin":
+            return False, "No se puede eliminar al usuario Admin."
+            
+        cell = worksheet.find(name)
+        if not cell:
+            return False, "Usuario no encontrado."
+            
+        worksheet.delete_rows(cell.row)
+        return True, "Usuario eliminado correctamente."
+    except Exception as e:
+        return False, f"Error eliminando usuario: {e}"
