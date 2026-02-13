@@ -182,68 +182,112 @@ def decode_image(image_file):
 def capturista_view(df, worksheet, detail_worksheet):
     st.title("Panel de Capturista")
     
-    tab_scan, tab_list = st.tabs(["🔫 Escaneo QR (Móvil/PC)", "📋 Mis Asignaciones"])
-    
-    with tab_scan:
-        st.header("Gestión por Código QR")
-        
-        scan_mode = st.radio("Modo de Escaneo:", ["Registro Inicial (Salida)", "Retorno (Cambio de Estatus)"], horizontal=True)
-        
-        input_method = st.radio("Método de Entrada:", ["Cámara del Dispositivo", "Lector USB / Manual"], horizontal=True)
-        
-        qr_data_found = None
+    # State management for navigation
+    if "selected_folio" not in st.session_state:
+        st.session_state.selected_folio = None
 
-        if input_method == "Cámara del Dispositivo":
-            img_file_buffer = st.camera_input("Toma una foto del QR")
-            
-            if img_file_buffer is not None:
-                # To read image file buffer with OpenCV:
-                decoded_qrs = decode_image(img_file_buffer)
-                if decoded_qrs:
-                    qr_data_found = decoded_qrs[0] # Take the first one found
-                    st.success(f"QR Detectado: {qr_data_found}")
-                else:
-                    st.warning("No se detectó ningún código QR en la imagen.")
-        else:
-            qr_data_found = st.text_input("Escanear Código QR aquí", key="qr_input_manual", help="Haz clic aquí y usa tu lector USB")
-
-        # Process the found QR (whether from camera or manual)
-        if qr_data_found:
-            # Add a button to confirm action to avoid accidental double submissions on reruns
-            if st.button(f"Confirmar Procesamiento: {qr_data_found}", key="confirm_qr"):
-                if scan_mode == "Registro Inicial (Salida)":
-                    success, msg = dtlm.register_qr_scan(detail_worksheet, qr_data_found, st.session_state.user, status="SURTIDO")
-                    if success:
-                        st.success(msg)
-                    else:
-                        st.warning(msg)
-                else:
-                    new_status_qr = st.selectbox("Estatus al retornar:", ["CAPTURADO", "DOC_LISTA", "EN_VALIDACION"], index=0, key="status_sel_qr")
-                    # We need a nested button or logic here, but Streamlit nested buttons are tricky.
-                    # Simplification: Show status selector *before* confirming, or just default to CAPTURADO if not critical.
-                    # Let's assume the user selects status first in a real UI, but here we are inside the logic.
-                    # Better UX: Move status selector outside the "if qr_data_found" block for Retorno mode.
-                    
-                    # For now, let's just process with a default or ask user to select before scanning if possible.
-                    # But since we are here, let's try to update.
-                    success, msg = dtlm.update_qr_status(detail_worksheet, qr_data_found, "CAPTURADO") # Defaulting to CAPTURADO for speed
-                    if success:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
+    # Filter for current user
+    my_pickings = df[df["CAPTURISTA"] == st.session_state.user].copy()
     
-    with tab_list:
-        # Filter for current user
-        my_pickings = df[df["CAPTURISTA"] == st.session_state.user].copy()
-        
+    if st.session_state.selected_folio:
+        # DETAIL VIEW
+        show_folio_detail(st.session_state.selected_folio, detail_worksheet)
+    else:
+        # MASTER VIEW (List)
         if my_pickings.empty:
             st.info("No tienes pickings asignados actualmente.")
             return
 
-        st.metric("Mis Pickings Pendientes", len(my_pickings[my_pickings["ESTATUS"] != "LIBERADO"]))
+        st.subheader("Mis Asignaciones")
         
-        st.subheader("Mis Asignaciones (Vista General)")
-        st.dataframe(my_pickings, use_container_width=True)
+        # Display as a list of actionable cards or a table with selection
+        for index, row in my_pickings.iterrows():
+            folio = row['FOLIO']
+            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+            with col1:
+                st.write(f"**Folio:** {folio}")
+            with col2:
+                st.write(f"Ruta: {row['RUTA']}")
+            with col3:
+                st.write(f"Estatus: {row['ESTATUS']}")
+            with col4:
+                if st.button("Abrir", key=f"btn_{folio}"):
+                    st.session_state.selected_folio = folio
+                    st.rerun()
+        
+        st.divider()
+
+def show_folio_detail(folio, detail_worksheet):
+    st.button("⬅️ Volver al listado", on_click=lambda: st.session_state.update({"selected_folio": None}))
+    
+    st.header(f"Gestión de Folio: {folio}")
+    
+    # Fetch existing details
+    details_df = dtlm.get_folio_details(detail_worksheet, folio)
+    count_scanned = len(details_df) if not details_df.empty else 0
+    
+    st.metric("Documentos Escaneados", count_scanned)
+    
+    col_scan, col_list = st.columns([1, 1])
+    
+    with col_scan:
+        st.subheader("Agregar Nuevo QR")
+        # Continuous-like scanning UI
+        input_method = st.radio("Método:", ["Cámara", "Lector USB"], horizontal=True, label_visibility="collapsed")
+        
+        qr_data_found = None
+        
+        if input_method == "Cámara":
+            # Camera input
+            img_buffer = st.camera_input("Escanear", key=f"cam_{folio}", label_visibility="collapsed")
+            if img_buffer:
+                decoded = decode_image(img_buffer)
+                if decoded:
+                    qr_data_found = decoded[0]
+                else:
+                    st.warning("No se detectó QR")
+        else:
+            # USB Reader input - auto submit on enter
+            qr_data_found = st.text_input("Haz clic y escanea", key=f"txt_{folio}")
+
+        if qr_data_found:
+            # Auto-register logic
+            # Verify if it belongs to this folio? 
+            # The prompt implies we attach it to this folio.
+            # But we should check if the QR string *contains* the folio if possible, or just trust the user.
+            # User said: "nutriendo el registro del folio... esos Qr que escanearia se agregaria"
+            
+            # Check if exists locally in the dataframe first to give fast feedback
+            already_exists = False
+            if not details_df.empty and "QR_DATA" in details_df.columns:
+                 if qr_data_found in details_df["QR_DATA"].values:
+                     already_exists = True
+            
+            if already_exists:
+                st.warning(f"⚠️ El QR '{qr_data_found}' ya está registrado en este folio.")
+            else:
+                success, msg = dtlm.register_qr_scan(detail_worksheet, qr_data_found, st.session_state.user, status="SURTIDO")
+                if success:
+                    st.success(f"✅ Agregado: {qr_data_found}")
+                    time.sleep(0.5) # Brief pause to show success
+                    st.rerun() # Rerun to update list immediately
+                else:
+                    st.error(msg)
+
+    with col_list:
+        st.subheader("Registros en este Folio")
+        if not details_df.empty:
+            # Show simple table with delete button
+            for idx, row in details_df.iterrows():
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.text(f"📄 {row.get('QR_DATA', 'Unknown')}")
+                with c2:
+                    if st.button("🗑️", key=f"del_{row.get('QR_DATA')}"):
+                        dtlm.delete_qr_scan(detail_worksheet, row.get('QR_DATA'))
+                        st.rerun()
+        else:
+            st.info("Aún no hay documentos escaneados.")
 
 if __name__ == "__main__":
     init_session_state()
