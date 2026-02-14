@@ -7,6 +7,10 @@ import cv2
 import numpy as np
 from pyzbar.pyzbar import decode
 from PIL import Image
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import av
+import queue
+import threading
 
 # Page configuration
 st.set_page_config(
@@ -337,14 +341,50 @@ def show_folio_detail(folio, detail_worksheet):
         qr_data_found = None
         
         if input_method == "Cámara":
-            # Camera input
-            img_buffer = st.camera_input("Escanear", key=f"cam_{folio}", label_visibility="collapsed")
-            if img_buffer:
-                decoded = decode_image(img_buffer)
-                if decoded:
-                    qr_data_found = decoded[0]
-                else:
-                    st.warning("No se detectó QR")
+            # Real-time WebRTC Scanner
+            RTC_CONFIGURATION = RTCConfiguration(
+                {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+            )
+
+            # Define a thread-safe queue in session state
+            if "qr_queue" not in st.session_state:
+                st.session_state.qr_queue = queue.Queue()
+
+            def video_frame_callback(frame):
+                img = frame.to_ndarray(format="bgr24")
+                
+                # Decode QR
+                decoded_objects = decode(img)
+                
+                for obj in decoded_objects:
+                    qr_text = obj.data.decode("utf-8")
+                    # Put in queue
+                    try:
+                        st.session_state.qr_queue.put_nowait(qr_text)
+                    except queue.Full:
+                        pass
+                
+                # Return frame (can draw box here if needed)
+                return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+            # WebRTC Component
+            ctx = webrtc_streamer(
+                key=f"scanner_{folio}",
+                mode=WebRtcMode.SENDRECV,
+                rtc_configuration=RTC_CONFIGURATION,
+                video_frame_callback=video_frame_callback,
+                media_stream_constraints={"video": {"facingMode": "environment"}, "audio": False},
+                async_processing=True,
+            )
+
+            # Check queue for results
+            if ctx.state.playing:
+                try:
+                    # Non-blocking get
+                    qr_data_found = st.session_state.qr_queue.get_nowait()
+                except queue.Empty:
+                    qr_data_found = None
+            
         else:
             # USB Reader input - auto submit on enter
             qr_data_found = st.text_input("Haz clic y escanea", key=f"txt_{folio}")
@@ -363,11 +403,12 @@ def show_folio_detail(folio, detail_worksheet):
                      already_exists = True
             
             if already_exists:
-                st.warning(f"⚠️ El QR '{qr_data_found}' ya está registrado en este folio.")
+                # Use toast for less intrusive warning
+                st.toast(f"⚠️ QR Repetido: {qr_data_found}", icon="⚠️")
             else:
                 success, msg = dtlm.register_qr_scan(detail_worksheet, qr_data_found, st.session_state.user, status="SURTIDO")
                 if success:
-                    st.success(f"✅ Agregado: {qr_data_found}")
+                    st.toast(f"✅ Agregado: {qr_data_found}", icon="✅")
                     time.sleep(0.5) # Brief pause to show success
                     st.rerun() # Rerun to update list immediately
                 else:
