@@ -6,3 +6,5 @@ openpyxl
 opencv-python-headless
 numpy
 pyzbar
+streamlit-webrtc
+av
