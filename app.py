@@ -98,13 +98,10 @@ def main_app():
         st.rerun()
 
     # Connection to Google Sheets
-    client = dm.get_gspread_client()
-    if not client:
-        st.warning("No se pudo conectar a Google Sheets. Revisa la configuración de secretos (.streamlit/secrets.toml).")
-        st.stop()
-        
-    worksheet = dm.get_or_create_worksheet(client)
-    detail_worksheet = dtlm.get_or_create_detail_worksheet(client)
+    # client = dm.get_gspread_client() # No longer needed here
+    
+    worksheet = dm.get_or_create_worksheet()
+    detail_worksheet = dtlm.get_or_create_detail_worksheet()
     
     if not worksheet or not detail_worksheet:
         st.error("No se pudo acceder a las hojas de cálculo.")
