@@ -36,35 +36,43 @@ def get_or_create_detail_worksheet():
 def parse_qr_code(qr_string):
     """
     Parses the QR string to extract the Folio.
-    Assumes format: "folio|financiamiento|piezas|..."
-    Returns (folio, extra_details) or (None, None) if invalid.
+    Returns (folio, extra_details).
     """
-    if not qr_string or "|" not in qr_string:
-        # Fallback: maybe the QR is just the folio?
-        return qr_string.strip(), "Raw QR"
+    if not qr_string: return None, None
     
-    parts = qr_string.split("|")
-    # Assuming first element is folio. Adjust index if needed.
-    folio = parts[0].strip()
-    extra_details = qr_string # Store full string for reference
-    return folio, extra_details
+    # Heuristic: If QR contains "|", assume format "FOLIO|DATA"
+    if "|" in qr_string:
+        parts = qr_string.split("|")
+        return parts[0].strip(), qr_string
+        
+    # If QR is just a long string, we might not be able to extract Folio easily
+    # unless we match it against known folios. 
+    # For now, we return the whole string as potential folio if it looks like one,
+    # but the calling function should override this if the context is known (e.g. inside a Folio view).
+    return qr_string.strip(), "Raw QR"
 
-def register_qr_scan(detail_ws, qr_data, capturista, status="SURTIDO"):
+def register_qr_scan(detail_ws, qr_data, capturista, status="SURTIDO", forced_folio=None):
     """
     Registers a scanned QR code.
-    1. Checks if QR already exists (prevent duplicates).
-    2. Extracts Folio.
-    3. Saves to 'detalle_pickings'.
+    If forced_folio is provided, it associates the QR with that folio regardless of QR content.
     """
     try:
         # 1. Check duplicates
         # For performance, we might want to cache existing QRs, but for now we search.
-        cell = detail_ws.find(qr_data)
-        if cell:
-            return False, f"Este QR ya fue registrado previamente (Fila {cell.row})."
+        try:
+            cell = detail_ws.find(qr_data)
+            if cell:
+                return False, f"Este QR ya fue registrado previamente (Fila {cell.row})."
+        except gspread.exceptions.CellNotFound:
+            pass # Safe to proceed
 
-        # 2. Parse
-        folio, extra = parse_qr_code(qr_data)
+        # 2. Parse or Force Folio
+        if forced_folio:
+            folio = forced_folio
+            extra = qr_data # The QR is the detail itself
+        else:
+            folio, extra = parse_qr_code(qr_data)
+            
         if not folio:
             return False, "Formato de QR inválido o no legible."
 
