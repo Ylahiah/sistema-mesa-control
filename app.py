@@ -34,24 +34,18 @@ def init_session_state():
     if "role" not in st.session_state:
         st.session_state.role = None
 
-def get_users_list(client):
+def get_users_list():
     """Helper to get users list safely"""
-    ws = dm.get_or_create_users_worksheet(client)
+    ws = dm.get_or_create_users_worksheet()
     if not ws: return []
     return dm.get_all_users(ws)
 
 def login_page():
     st.title("📦 Control de Pickings - Acceso")
     
-    # Connect to DB to fetch users
-    client = dm.get_gspread_client()
-    if not client:
-        st.error("Error de conexión. Verifica configuración.")
-        return
-
-    users_data = get_users_list(client)
+    users_data = get_users_list()
     if not users_data:
-        st.warning("No hay usuarios registrados.")
+        st.warning("No hay usuarios registrados o error de conexión.")
         return
         
     # Prepare lists for dropdown
@@ -129,8 +123,7 @@ def responsable_view(df, worksheet, detail_worksheet):
     st.title("Panel de Responsable")
     
     # We need to access users worksheet for the new tab
-    client = dm.get_gspread_client()
-    users_ws = dm.get_or_create_users_worksheet(client)
+    users_ws = dm.get_or_create_users_worksheet()
     
     # Check permissions
     show_upload = st.session_state.user in AUTHORIZED_UPLOADERS
@@ -250,7 +243,7 @@ def responsable_view(df, worksheet, detail_worksheet):
             folio_to_assign = st.selectbox("Seleccionar Folio", df["FOLIO"].unique())
         with c2:
             # Dynamic users list
-            current_users = get_users_list(client)
+            current_users = get_users_list()
             capturistas = [u["USUARIO"] for u in current_users if u["ROL"] == "CAPTURISTA"]
             # Fallback if no capturistas
             if not capturistas: capturistas = ["Sin Capturistas"]
