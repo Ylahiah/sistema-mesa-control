@@ -13,7 +13,9 @@ SCOPES = [
 REQUIRED_COLUMNS = [
     "REGION", "FECHA_ENTREGA", "RUTA", "FOLIO", 
     "CAPTURISTA", "EVENTO", "FINANCIAMIENTO", 
-    "ESTATUS", "FECHA_ULTIMO_EVENTO"
+    "ESTATUS", "FECHA_ULTIMO_EVENTO",
+    "FOLIO DOCUMENTOS POR PICKING", "# FOLIOS DOCUMENTOS", 
+    "CUENTA FOLIOS", "FOLIOS SCALD", "ESTATUS FOLIOS SCALD"
 ]
 
 @st.cache_resource
@@ -291,3 +293,65 @@ def delete_user(worksheet, name):
         return True, "Usuario eliminado correctamente."
     except Exception as e:
         return False, f"Error eliminando usuario: {e}"
+
+def increment_folio_count(worksheet, folio, scanned_qr):
+    """
+    Adds a scanned QR to 'FOLIO DOCUMENTOS POR PICKING' and increments '# FOLIOS DOCUMENTOS'.
+    This is for the Warehouse Reception scanning.
+    """
+    try:
+        cell = worksheet.find(folio)
+        if not cell:
+            return False, "Folio padre no encontrado en base maestra."
+        
+        row_idx = cell.row
+        headers = worksheet.row_values(1)
+        
+        try:
+            docs_col = headers.index("FOLIO DOCUMENTOS POR PICKING") + 1
+            count_col = headers.index("# FOLIOS DOCUMENTOS") + 1
+            status_col = headers.index("ESTATUS") + 1
+        except ValueError:
+            return False, "Columnas requeridas no encontradas en la hoja."
+
+        # Get current values
+        current_docs = worksheet.cell(row_idx, docs_col).value or ""
+        current_count = worksheet.cell(row_idx, count_col).value
+        
+        # Safe integer conversion
+        try:
+            current_count = int(current_count) if current_count else 0
+        except:
+            current_count = 0
+
+        # Check duplicates in the string
+        if scanned_qr in current_docs:
+            return False, "Este documento ya fue escaneado para este folio."
+
+        # Append new QR
+        if current_docs:
+            new_docs = f"{current_docs}\n{scanned_qr}"
+        else:
+            new_docs = scanned_qr
+            
+        new_count = current_count + 1
+        
+        # Batch update
+        updates = [
+            {"range": gspread.utils.rowcol_to_a1(row_idx, docs_col), "values": [[new_docs]]},
+            {"range": gspread.utils.rowcol_to_a1(row_idx, count_col), "values": [[new_count]]},
+            # Default status to IMPRESOS on first scan if empty
+            # But prompt says: "al ser escaneados la primera vez debera estar en estatus impresos"
+            # We can force it or check current status. Let's force it if it's PENDIENTE or empty.
+        ]
+        
+        # Check current status to decide if update needed
+        current_status = worksheet.cell(row_idx, status_col).value
+        if not current_status or current_status == "PENDIENTE":
+             updates.append({"range": gspread.utils.rowcol_to_a1(row_idx, status_col), "values": [["IMPRESOS"]]})
+        
+        worksheet.batch_update(updates)
+        return True, f"Agregado correctamente. Conteo actual: {new_count}"
+
+    except Exception as e:
+        return False, f"Error en incremento: {e}"
