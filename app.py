@@ -20,8 +20,11 @@ st.set_page_config(
 )
 
 # Constants
-STATUS_OPTIONS_CAPTURISTA = ["SURTIDO", "CAPTURADO", "EN_VALIDACION", "DOC_LISTA"]
-STATUS_OPTIONS_RESPONSABLE = ["SURTIDO", "CAPTURADO", "EN_VALIDACION", "DOC_LISTA", "LIBERADO"]
+STATUS_OPTIONS_CAPTURISTA = ["IMPRESOS", "EN SURTIDO", "EN CAPTURA", "CAPTURADOS"]
+STATUS_OPTIONS_RESPONSABLE = ["IMPRESOS", "EN SURTIDO", "EN CAPTURA", "CAPTURADOS", "VALIDACION", "EMBARQUE", "LIBERADO"]
+
+AUTHORIZED_UPLOADERS = ["CHACON SANCHEZ FABIAN RUBISEL", "ESCOBAR RUIZ JOSE MANUEL", "Admin"]
+DASHBOARD_VIEWERS = ["MENDEZ PEREZ JENNYFER", "RUIZ DIAZ CYNTHIA", "MARIO PEREZ AGUILAR", "Admin"]
 
 def init_session_state():
     if "logged_in" not in st.session_state:
@@ -131,9 +134,21 @@ def responsable_view(df, worksheet, detail_worksheet):
     client = dm.get_gspread_client()
     users_ws = dm.get_or_create_users_worksheet(client)
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Gestión Operativa", "📤 Carga Masiva", "👥 Reasignación", "👤 Gestión Usuarios"])
+    # Check permissions
+    show_upload = st.session_state.user in AUTHORIZED_UPLOADERS
+    show_dashboard = st.session_state.user in DASHBOARD_VIEWERS
     
-    with tab1:
+    tabs_list = ["📋 Gestión Operativa"]
+    if show_upload: tabs_list.append("📤 Carga Masiva")
+    if show_dashboard: tabs_list.append("📊 Dashboard KPI")
+    tabs_list.append("📥 Recepción Almacén") # New screen for quick scan
+    tabs_list.append("👥 Reasignación")
+    tabs_list.append("👤 Gestión Usuarios")
+    
+    tabs = st.tabs(tabs_list)
+    
+    # 1. Gestion Operativa (Visible to all responsible)
+    with tabs[0]:
         st.subheader("Tablero General")
         
         # Filters
@@ -154,40 +169,82 @@ def responsable_view(df, worksheet, detail_worksheet):
             filtered_df = filtered_df[filtered_df["FOLIO"].astype(str).str.contains(search_folio, case=False)]
             
         st.dataframe(filtered_df, use_container_width=True)
-        
-        st.divider()
-        st.subheader("Cambio de Estatus Rápido (Folio Completo)")
-        col_act1, col_act2 = st.columns(2)
-        with col_act1:
-            selected_folio = st.selectbox("Seleccionar Folio para acción", filtered_df["FOLIO"].unique(), key="resp_folio_select")
-        with col_act2:
-            new_status = st.selectbox("Nuevo Estatus", STATUS_OPTIONS_RESPONSABLE, key="resp_status_select")
-            
-        if st.button("Actualizar Estatus"):
-            success, msg = dm.update_status(worksheet, str(selected_folio), new_status, st.session_state.user)
-            if success:
-                st.success(msg)
-                time.sleep(1)
-                st.rerun()
-            else:
-                st.error(msg)
 
-    with tab2:
-        st.subheader("Carga de Nuevos Pickings")
-        uploaded_file = st.file_uploader("Subir archivo Excel", type=["xlsx", "xls"])
+    # Dynamic Tab Content handling
+    current_tab_idx = 1
+    
+    # 2. Carga Masiva (Restricted)
+    if show_upload:
+        with tabs[current_tab_idx]:
+            st.subheader("Carga de Nuevos Pickings")
+            st.info(f"Usuario autorizado: {st.session_state.user}")
+            uploaded_file = st.file_uploader("Subir archivo Excel", type=["xlsx", "xls"])
+            
+            if uploaded_file:
+                if st.button("Procesar Archivo"):
+                    with st.spinner("Procesando y sincronizando..."):
+                        success, msg = dm.sync_excel_data(worksheet, uploaded_file)
+                        if success:
+                            st.success(msg)
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+        current_tab_idx += 1
         
-        if uploaded_file:
-            if st.button("Procesar Archivo"):
-                with st.spinner("Procesando y sincronizando..."):
-                    success, msg = dm.sync_excel_data(worksheet, uploaded_file)
-                    if success:
-                        st.success(msg)
-                        time.sleep(2)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-                        
-    with tab3:
+    # 3. Dashboard KPI (Restricted)
+    if show_dashboard:
+        with tabs[current_tab_idx]:
+            st.subheader("Indicadores de Desempeño (KPI)")
+            
+            # Simple KPIs based on ESTATUS
+            total_pickings = len(df)
+            status_counts = df["ESTATUS"].value_counts()
+            
+            kpi1, kpi2, kpi3 = st.columns(3)
+            kpi1.metric("Total Pickings", total_pickings)
+            kpi2.metric("Capturados", status_counts.get("CAPTURADOS", 0))
+            kpi3.metric("Pendientes/En Proceso", total_pickings - status_counts.get("CAPTURADOS", 0) - status_counts.get("LIBERADO", 0))
+            
+            st.bar_chart(status_counts)
+            
+            st.subheader("Avance por Capturista")
+            capturista_counts = df.groupby(["CAPTURISTA", "ESTATUS"]).size().unstack(fill_value=0)
+            st.dataframe(capturista_counts, use_container_width=True)
+            
+        current_tab_idx += 1
+
+    # 4. Recepción Almacén (New Quick Scan)
+    with tabs[current_tab_idx]:
+        st.subheader("Recepción de Almacén (Escaneo Rápido)")
+        st.markdown("Escanea los documentos para agregarlos al folio y sumar el contador.")
+        
+        # Similar logic to detail scan but updating master columns
+        qr_reception = st.text_input("Escanear Picking (QR)", key="reception_scan")
+        
+        if qr_reception:
+            # Parse to get folio parent? Or assume QR contains folio?
+            # User said: "automaticamnte el folio se debe de buscar y agregar... separados por un espacio"
+            # Assuming QR string contains the folio ID somewhere or matches the FOLIO column if partial.
+            # Let's try to extract FOLIO from QR if format is known (FOLIO|...).
+            
+            # Using our helper
+            folio_found, _ = dtlm.parse_qr_code(qr_reception)
+            
+            if folio_found:
+                 # Call new data_manager function
+                 success, msg = dm.increment_folio_count(worksheet, folio_found, qr_reception)
+                 if success:
+                     st.success(msg)
+                 else:
+                     st.error(msg)
+            else:
+                st.warning("Formato de QR no reconocido.")
+    
+    current_tab_idx += 1
+    
+    # 5. Reasignación
+    with tabs[current_tab_idx]:
         st.subheader("Reasignación de Capturistas")
         
         c1, c2 = st.columns(2)
@@ -210,7 +267,7 @@ def responsable_view(df, worksheet, detail_worksheet):
             else:
                 st.error(msg)
     
-    with tab4:
+    with tabs[current_tab_idx]:
         st.subheader("Gestión de Usuarios (Capturistas y Responsables)")
         
         # Add new user form
