@@ -57,11 +57,16 @@ def with_retry(func, *args, **kwargs):
             raise e
 
 @st.cache_resource(ttl=300) # Cache worksheet object for 5 mins to avoid re-opening constantly
-def get_or_create_worksheet(client, sheet_name="pickings"):
+def get_or_create_worksheet():
     """
     Gets the worksheet or creates it if it doesn't exist (assuming the spreadsheet exists).
+    Client created internally.
     """
+    client = get_gspread_client()
+    if not client: return None
+    
     SPREADSHEET_NAME = "SISTEMA_PICKINGS_DB"
+    sheet_name = "pickings"
     
     try:
         try:
