@@ -2,6 +2,7 @@ import pandas as pd
 import gspread
 from datetime import datetime
 import streamlit as st
+import data_manager as dm  # Import shared utilities
 
 # Define columns for the new 'detalle_pickings' sheet
 DETAIL_COLUMNS = [
@@ -9,21 +10,27 @@ DETAIL_COLUMNS = [
     "ESTATUS_ITEM", "FECHA_ESCANEO", "DETALLES_EXTRA"
 ]
 
-def get_or_create_detail_worksheet(client, sheet_name="detalle_pickings"):
+@st.cache_resource(ttl=300)
+def get_or_create_detail_worksheet():
     """
     Gets or creates the detail worksheet for individual QR tracking.
+    Client created internally.
     """
+    client = dm.get_gspread_client()
+    if not client: return None
+    
+    sheet_name = "detalle_pickings"
     SPREADSHEET_NAME = "SISTEMA_PICKINGS_DB"
     try:
-        sh = client.open(SPREADSHEET_NAME)
+        sh = dm.with_retry(client.open, SPREADSHEET_NAME)
         try:
-            worksheet = sh.worksheet(sheet_name)
+            worksheet = dm.with_retry(sh.worksheet, sheet_name)
         except gspread.WorksheetNotFound:
-            worksheet = sh.add_worksheet(title=sheet_name, rows=5000, cols=10)
+            worksheet = dm.with_retry(sh.add_worksheet, title=sheet_name, rows=5000, cols=10)
             worksheet.append_row(DETAIL_COLUMNS)
         return worksheet
     except Exception as e:
-        st.error(f"Error accessing detail worksheet: {e}")
+        print(f"Error accessing detail worksheet: {e}")
         return None
 
 def parse_qr_code(qr_string):
