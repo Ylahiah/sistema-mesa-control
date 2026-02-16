@@ -451,7 +451,14 @@ def show_folio_detail(folio, detail_worksheet):
                 # Use toast for less intrusive warning
                 st.toast(f"⚠️ QR Repetido: {qr_data_found}", icon="⚠️")
             else:
-                success, msg = dtlm.register_qr_scan(detail_worksheet, qr_data_found, st.session_state.user, status="SURTIDO")
+                # We force the association with the current folio since we are inside the folio view
+                success, msg = dtlm.register_qr_scan(
+                    detail_worksheet, 
+                    qr_data_found, 
+                    st.session_state.user, 
+                    status="SURTIDO",
+                    forced_folio=folio
+                )
                 if success:
                     st.toast(f"✅ Agregado: {qr_data_found}", icon="✅")
                     time.sleep(0.5) # Brief pause to show success
@@ -462,14 +469,19 @@ def show_folio_detail(folio, detail_worksheet):
     with col_list:
         st.subheader("Registros en este Folio")
         if not details_df.empty:
-            # Show simple table with delete button
+            # Filter specifically for this folio to avoid showing unrelated scans 
+            # (though get_folio_details already does this, safety check)
+            # Displaying QR_DATA only
+            
+            # Simple table with delete button
             for idx, row in details_df.iterrows():
+                qr_val = row.get('QR_DATA', 'Unknown')
                 c1, c2 = st.columns([4, 1])
                 with c1:
-                    st.text(f"📄 {row.get('QR_DATA', 'Unknown')}")
+                    st.text(f"📄 {qr_val}")
                 with c2:
-                    if st.button("🗑️", key=f"del_{row.get('QR_DATA')}"):
-                        dtlm.delete_qr_scan(detail_worksheet, row.get('QR_DATA'))
+                    if st.button("🗑️", key=f"del_{qr_val}_{idx}"): # Unique key with index
+                        dtlm.delete_qr_scan(detail_worksheet, qr_val)
                         st.rerun()
         else:
             st.info("Aún no hay documentos escaneados.")
