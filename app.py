@@ -339,7 +339,7 @@ def capturista_view(df, worksheet, detail_worksheet):
     
     if st.session_state.selected_folio:
         # DETAIL VIEW
-        show_folio_detail(st.session_state.selected_folio, detail_worksheet)
+        show_folio_detail(st.session_state.selected_folio, detail_worksheet, worksheet)
     else:
         # MASTER VIEW (List)
         if my_pickings.empty:
@@ -349,26 +349,62 @@ def capturista_view(df, worksheet, detail_worksheet):
         st.subheader("Mis Asignaciones")
         
         # Display as a list of actionable cards or a table with selection
+        # We need to show count of documents (from # FOLIOS DOCUMENTOS column)
+        # And status dropdown
+        
         for index, row in my_pickings.iterrows():
             folio = row['FOLIO']
-            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
-            with col1:
-                st.write(f"**Folio:** {folio}")
-            with col2:
-                st.write(f"Ruta: {row['RUTA']}")
-            with col3:
-                st.write(f"Estatus: {row['ESTATUS']}")
-            with col4:
-                if st.button("Abrir", key=f"btn_{folio}"):
-                    st.session_state.selected_folio = folio
-                    st.rerun()
-        
-        st.divider()
+            current_status = row['ESTATUS']
+            doc_count = row['# FOLIOS DOCUMENTOS'] if row['# FOLIOS DOCUMENTOS'] else 0
+            
+            # Card-like container
+            with st.container():
+                col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
+                with col1:
+                    st.write(f"**Folio:** {folio}")
+                    st.caption(f"Ruta: {row['RUTA']} | Docs: {doc_count}")
+                
+                with col2:
+                    st.metric("Docs", doc_count)
+                    
+                with col3:
+                    # Status Dropdown
+                    # We need a unique key. If user changes this, it updates DB.
+                    try:
+                        idx_status = STATUS_OPTIONS_CAPTURISTA.index(current_status)
+                    except ValueError:
+                        idx_status = 0
+                        
+                    new_status = st.selectbox(
+                        "Estatus", 
+                        STATUS_OPTIONS_CAPTURISTA, 
+                        index=idx_status, 
+                        key=f"status_{folio}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    if new_status != current_status:
+                        # Update DB immediately
+                        dm.update_status(worksheet, folio, new_status, st.session_state.user)
+                        st.toast(f"Estatus actualizado: {new_status}")
+                        time.sleep(0.5)
+                        st.rerun()
 
-def show_folio_detail(folio, detail_worksheet):
+                with col4:
+                    if st.button("Abrir", key=f"btn_{folio}"):
+                        st.session_state.selected_folio = folio
+                        st.rerun()
+                
+                st.divider()
+
+def show_folio_detail(folio, detail_worksheet, master_worksheet):
     st.button("⬅️ Volver al listado", on_click=lambda: st.session_state.update({"selected_folio": None}))
     
     st.header(f"Gestión de Folio: {folio}")
+    
+    # Get Master Data for Status Sync
+    # We could optimize this by passing the row, but fetching fresh is safer
+    # Assuming we have access to master_worksheet here. Need to pass it in.
     
     # Fetch existing details
     details_df = dtlm.get_folio_details(detail_worksheet, folio)
@@ -461,6 +497,20 @@ def show_folio_detail(folio, detail_worksheet):
                 )
                 if success:
                     st.toast(f"✅ Agregado: {qr_data_found}", icon="✅")
+                    
+                    # --- AUTO-UPDATE PARENT STATUS LOGIC ---
+                    # Logic: If scanning starts (items added), move to "EN SURTIDO" or "EN CAPTURA"
+                    # Default: "EN CAPTURA" if we are scanning? 
+                    # Prompt says: "IMPRESOS -> EN SURTIDO -> EN CAPTURA -> CAPTURADOS"
+                    # If I scan a child, it means I am working on it.
+                    # Let's auto-move to "EN CAPTURA" if it was "IMPRESOS" or "EN SURTIDO".
+                    # But maybe user wants to control it.
+                    # Let's just update the count in master for now?
+                    # Or at least refresh UI.
+                    
+                    # For now, we won't force status change on scan unless requested, 
+                    # but we MUST refresh to show new count if we go back.
+                    
                     time.sleep(0.5) # Brief pause to show success
                     st.rerun() # Rerun to update list immediately
                 else:
