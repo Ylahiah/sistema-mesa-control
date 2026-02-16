@@ -245,10 +245,14 @@ def reassign_capturista(worksheet, folio, new_capturista, user_name):
         return False, f"Update failed: {e}"
 
 @st.cache_resource(ttl=300)
-def get_or_create_users_worksheet(client):
+def get_or_create_users_worksheet():
     """
     Gets or creates the 'usuarios' worksheet.
+    Client is created internally to avoid hashing issues.
     """
+    client = get_gspread_client()
+    if not client: return None
+    
     sheet_name = "usuarios"
     SPREADSHEET_NAME = "SISTEMA_PICKINGS_DB"
     try:
