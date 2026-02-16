@@ -3,6 +3,7 @@ import gspread
 import streamlit as st
 from datetime import datetime
 from google.oauth2.service_account import Credentials
+import time
 
 # Scope for Google Sheets API
 SCOPES = [
@@ -30,30 +31,44 @@ def get_gspread_client():
             
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        
+        # Add retry with backoff for client authorization
+        # Although client auth usually doesn't hit quota, operations do.
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Error connecting to Google Sheets: {e}")
         return None
 
+def with_retry(func, *args, **kwargs):
+    """
+    Helper to retry API calls on 429 Quota Exceeded.
+    """
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                if attempt < max_retries - 1:
+                    sleep_time = (2 ** attempt) + 1  # Exponential backoff: 2s, 3s, 5s...
+                    time.sleep(sleep_time)
+                    continue
+            raise e
+
+@st.cache_resource(ttl=300) # Cache worksheet object for 5 mins to avoid re-opening constantly
 def get_or_create_worksheet(client, sheet_name="pickings"):
     """
     Gets the worksheet or creates it if it doesn't exist (assuming the spreadsheet exists).
-    For simplicity, we assume the user provides the Spreadsheet Name or ID in secrets, 
-    or we search for a specific filename. 
-    Here, we'll try to open a spreadsheet named 'SISTEMA_PICKINGS_DB' or similar, 
-    or just 'pickings' if that's the file name.
-    
-    Let's assume the spreadsheet name is defined in secrets or hardcoded.
     """
     SPREADSHEET_NAME = "SISTEMA_PICKINGS_DB"
     
     try:
         try:
-            sh = client.open(SPREADSHEET_NAME)
+            # We don't cache client.open because client object is already cached
+            # But we should retry the open call
+            sh = with_retry(client.open, SPREADSHEET_NAME)
         except gspread.SpreadsheetNotFound:
-            # Instead of creating, we ask the user to create and share it
-            # This avoids Quota issues on Service Accounts and ensures the user owns the data
             service_email = client.auth.service_account_email
             error_msg = (
                 f"No se encontró la hoja de cálculo '{SPREADSHEET_NAME}'.\n\n"
@@ -66,23 +81,26 @@ def get_or_create_worksheet(client, sheet_name="pickings"):
             return None
         
         try:
-            worksheet = sh.worksheet(sheet_name)
+            worksheet = with_retry(sh.worksheet, sheet_name)
         except gspread.WorksheetNotFound:
-            worksheet = sh.add_worksheet(title=sheet_name, rows=1000, cols=20)
-            # Init headers
+            worksheet = with_retry(sh.add_worksheet, title=sheet_name, rows=1000, cols=20)
             worksheet.append_row(REQUIRED_COLUMNS)
             
         return worksheet
     except Exception as e:
-        st.error(f"Error accessing worksheet: {e}")
+        # Don't show error immediately on UI if it's just a temporary glitch, let app handle None
+        # st.error(f"Error accessing worksheet: {e}")
+        print(f"Error accessing worksheet: {e}")
         return None
 
-def load_data(worksheet):
+@st.cache_data(ttl=60) # Cache data for 60 seconds to reduce read quota
+def load_data(_worksheet):
     """
     Reads data from the worksheet and returns a DataFrame.
     """
     try:
-        data = worksheet.get_all_records()
+        # Use with_retry for get_all_records
+        data = with_retry(_worksheet.get_all_records)
         if not data:
             return pd.DataFrame(columns=REQUIRED_COLUMNS)
         df = pd.DataFrame(data)
@@ -226,6 +244,7 @@ def reassign_capturista(worksheet, folio, new_capturista, user_name):
     except Exception as e:
         return False, f"Update failed: {e}"
 
+@st.cache_resource(ttl=300)
 def get_or_create_users_worksheet(client):
     """
     Gets or creates the 'usuarios' worksheet.
@@ -233,28 +252,28 @@ def get_or_create_users_worksheet(client):
     sheet_name = "usuarios"
     SPREADSHEET_NAME = "SISTEMA_PICKINGS_DB"
     try:
-        sh = client.open(SPREADSHEET_NAME)
+        sh = with_retry(client.open, SPREADSHEET_NAME)
         try:
-            worksheet = sh.worksheet(sheet_name)
+            worksheet = with_retry(sh.worksheet, sheet_name)
         except gspread.WorksheetNotFound:
-            worksheet = sh.add_worksheet(title=sheet_name, rows=100, cols=5)
+            worksheet = with_retry(sh.add_worksheet, title=sheet_name, rows=100, cols=5)
             # Default headers
             worksheet.append_row(["USUARIO", "ROL", "FECHA_CREACION"])
             # Default Admin user
             worksheet.append_row(["Admin", "RESPONSABLE", datetime.now().strftime("%Y-%m-%d")])
         return worksheet
     except Exception as e:
-        st.error(f"Error accessing users worksheet: {e}")
+        print(f"Error accessing users worksheet: {e}")
         return None
 
-def get_all_users(worksheet):
+@st.cache_data(ttl=300) # Cache users for 5 mins as they don't change often
+def get_all_users(_worksheet):
     """
     Returns a list of dictionaries with user info.
     """
     try:
-        records = worksheet.get_all_records()
+        records = with_retry(_worksheet.get_all_records)
         if not records:
-             # Fallback if empty but header exists, though we create admin by default
              return [{"USUARIO": "Admin", "ROL": "RESPONSABLE"}]
         return records
     except Exception as e:
