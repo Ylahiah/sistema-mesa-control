@@ -383,3 +383,33 @@ def increment_folio_count(worksheet, folio, scanned_qr):
 
     except Exception as e:
         return False, f"Error en incremento: {e}"
+
+def update_parent_status_based_on_children(worksheet, folio, child_status="SURTIDO"):
+    """
+    Updates the parent folio status logic.
+    For now, if a child is scanned as SURTIDO, parent moves to EN SURTIDO?
+    Or if user manually changes it.
+    
+    Logic requested:
+    - Default: IMPRESOS (set by warehouse reception)
+    - Capturista scans for work -> EN SURTIDO? Or EN CAPTURA?
+    
+    Let's keep it simple: If any child activity happens, we might want to update parent.
+    But user wants a dropdown in the main view too.
+    
+    This function specifically updates the parent status column.
+    """
+    try:
+        cell = worksheet.find(folio)
+        if not cell: return False
+        
+        row_idx = cell.row
+        headers = worksheet.row_values(1)
+        status_col = headers.index("ESTATUS") + 1
+        
+        # We just update it. The logic of *what* status to set is decided by the caller (UI)
+        # based on what action was taken.
+        worksheet.update_cell(row_idx, status_col, child_status)
+        return True
+    except:
+        return False
