@@ -117,8 +117,6 @@ def main_app():
         st.stop()
 
     # Load Data
-    # Optimization: Only load full data for Responsable or summary
-    # For scanning, we might not need to load everything immediately
     with st.spinner("Cargando datos..."):
         df = dm.load_data(worksheet)
 
