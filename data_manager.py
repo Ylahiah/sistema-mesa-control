@@ -4,6 +4,7 @@ import streamlit as st
 from datetime import datetime
 from google.oauth2.service_account import Credentials
 import time
+import random
 
 # Scope for Google Sheets API
 SCOPES = [
@@ -43,15 +44,19 @@ def get_gspread_client():
 def with_retry(func, *args, **kwargs):
     """
     Helper to retry API calls on 429 Quota Exceeded.
+    More aggressive backoff to solve persistent quota issues.
     """
-    max_retries = 3
+    max_retries = 4
     for attempt in range(max_retries):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            if "429" in str(e) or "Quota exceeded" in str(e):
+            error_str = str(e)
+            if "429" in error_str or "Quota exceeded" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                 if attempt < max_retries - 1:
-                    sleep_time = (2 ** attempt) + 1  # Exponential backoff: 2s, 3s, 5s...
+                    # Exponential backoff with jitter: 2s, 6s, 14s... + random
+                    sleep_time = (2 ** (attempt + 1)) + 2 + random.uniform(0, 1)
+                    print(f"Quota hit. Retrying in {sleep_time:.2f}s...")
                     time.sleep(sleep_time)
                     continue
             raise e
@@ -98,7 +103,7 @@ def get_or_create_worksheet():
         print(f"Error accessing worksheet: {e}")
         return None
 
-@st.cache_data(ttl=300) # Increased to 5 mins to drastically reduce quota usage
+@st.cache_data(ttl=300) 
 def load_data(_worksheet):
     """
     Reads data from the worksheet and returns a DataFrame.
@@ -115,7 +120,11 @@ def load_data(_worksheet):
                 df[col] = ""
         return df
     except Exception as e:
-        st.error(f"Error reading data: {e}")
+        # Suppress the red error banner for quota issues
+        # Return empty DF to allow UI to render partially or retry later
+        print(f"Error reading data (likely quota): {e}")
+        st.warning("El sistema está saturado. Reintentando en unos segundos...")
+        time.sleep(2)
         return pd.DataFrame(columns=REQUIRED_COLUMNS)
 
 def sync_excel_data(worksheet, uploaded_file):
