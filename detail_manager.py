@@ -139,7 +139,6 @@ def get_all_detail_counts(_detail_ws):
         if not all_values or len(all_values) < 2:
             return {}
             
-        # Assuming header is row 1
         headers = all_values[0]
         try:
             folio_idx = headers.index("FOLIO_PADRE")
