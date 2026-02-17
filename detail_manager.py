@@ -127,6 +127,36 @@ def delete_qr_scan(detail_ws, qr_data):
     except Exception as e:
         return False, f"Error eliminando registro: {e}"
 
+def get_all_detail_counts(detail_ws):
+    """
+    Returns a dictionary mapping FOLIO_PADRE to count of records.
+    Optimized for batch display.
+    """
+    try:
+        # Get all records at once (cached if possible by gspread or we cache here?)
+        # Since this is called often in list view, we should be careful.
+        # But for now, let's fetch all. If too slow, we cache.
+        all_values = detail_ws.get_all_values()
+        if not all_values or len(all_values) < 2:
+            return {}
+            
+        # Assuming header is row 1
+        headers = all_values[0]
+        try:
+            folio_idx = headers.index("FOLIO_PADRE")
+        except ValueError:
+            return {}
+            
+        counts = {}
+        for row in all_values[1:]:
+            if len(row) > folio_idx:
+                folio = row[folio_idx]
+                if folio:
+                    counts[folio] = counts.get(folio, 0) + 1
+        return counts
+    except Exception as e:
+        return {}
+
 def get_folio_details(detail_ws, folio):
     """
     Retrieves all QR records associated with a specific Folio.
