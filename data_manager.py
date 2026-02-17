@@ -98,7 +98,7 @@ def get_or_create_worksheet():
         print(f"Error accessing worksheet: {e}")
         return None
 
-@st.cache_data(ttl=60) # Cache data for 60 seconds to reduce read quota
+@st.cache_data(ttl=300) # Increased to 5 mins to drastically reduce quota usage
 def load_data(_worksheet):
     """
     Reads data from the worksheet and returns a DataFrame.
