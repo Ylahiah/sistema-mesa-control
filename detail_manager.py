@@ -127,16 +127,15 @@ def delete_qr_scan(detail_ws, qr_data):
     except Exception as e:
         return False, f"Error eliminando registro: {e}"
 
-def get_all_detail_counts(detail_ws):
+@st.cache_data(ttl=60) # Cache detail counts for 1 min
+def get_all_detail_counts(_detail_ws):
     """
     Returns a dictionary mapping FOLIO_PADRE to count of records.
     Optimized for batch display.
     """
     try:
-        # Get all records at once (cached if possible by gspread or we cache here?)
-        # Since this is called often in list view, we should be careful.
-        # But for now, let's fetch all. If too slow, we cache.
-        all_values = detail_ws.get_all_values()
+        # Use retry wrapper from data_manager
+        all_values = dm.with_retry(_detail_ws.get_all_values)
         if not all_values or len(all_values) < 2:
             return {}
             
