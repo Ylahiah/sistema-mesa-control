@@ -404,7 +404,7 @@ def capturista_view(df, worksheet, detail_worksheet):
                         st.toast(f"Estatus actualizado: {new_status}")
                         # Invalidate cache to reflect change
                         dm.load_data.clear()
-                        time.sleep(0.5)
+                        # We don't need to sleep here if we clear cache, rerunning will fetch fresh data
                         st.rerun()
 
                 with col4:
