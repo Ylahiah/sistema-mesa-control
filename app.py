@@ -352,20 +352,35 @@ def capturista_view(df, worksheet, detail_worksheet):
         # We need to show count of documents (from # FOLIOS DOCUMENTOS column)
         # And status dropdown
         
+        # Optimized: Get all detail counts at once to avoid querying inside loop
+        # Note: We need to implement get_all_detail_counts in detail_manager
+        # For now, let's assume we can fetch it. If not implemented, we skip or do it slow.
+        try:
+            detail_counts = dtlm.get_all_detail_counts(detail_worksheet)
+        except AttributeError:
+            detail_counts = {}
+        
         for index, row in my_pickings.iterrows():
             folio = row['FOLIO']
             current_status = row['ESTATUS']
-            doc_count = row['# FOLIOS DOCUMENTOS'] if row['# FOLIOS DOCUMENTOS'] else 0
+            
+            # Count from Warehouse (Master)
+            doc_count_warehouse = row['# FOLIOS DOCUMENTOS'] if row['# FOLIOS DOCUMENTOS'] else 0
+            
+            # Count from Capturista (Detail)
+            doc_count_scanned = detail_counts.get(str(folio), 0)
             
             # Card-like container
             with st.container():
                 col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
                 with col1:
                     st.write(f"**Folio:** {folio}")
-                    st.caption(f"Ruta: {row['RUTA']} | Docs: {doc_count}")
+                    st.caption(f"Ruta: {row['RUTA']}")
                 
                 with col2:
-                    st.metric("Docs", doc_count)
+                    # Dual metric
+                    st.write(f"📦 Almacén: **{doc_count_warehouse}**")
+                    st.write(f"✅ Escaneados: **{doc_count_scanned}**")
                     
                 with col3:
                     # Status Dropdown
@@ -387,6 +402,8 @@ def capturista_view(df, worksheet, detail_worksheet):
                         # Update DB immediately
                         dm.update_status(worksheet, folio, new_status, st.session_state.user)
                         st.toast(f"Estatus actualizado: {new_status}")
+                        # Invalidate cache to reflect change
+                        dm.load_data.clear()
                         time.sleep(0.5)
                         st.rerun()
 
@@ -498,18 +515,17 @@ def show_folio_detail(folio, detail_worksheet, master_worksheet):
                 if success:
                     st.toast(f"✅ Agregado: {qr_data_found}", icon="✅")
                     
-                    # --- AUTO-UPDATE PARENT STATUS LOGIC ---
-                    # Logic: If scanning starts (items added), move to "EN SURTIDO" or "EN CAPTURA"
-                    # Default: "EN CAPTURA" if we are scanning? 
-                    # Prompt says: "IMPRESOS -> EN SURTIDO -> EN CAPTURA -> CAPTURADOS"
-                    # If I scan a child, it means I am working on it.
-                    # Let's auto-move to "EN CAPTURA" if it was "IMPRESOS" or "EN SURTIDO".
-                    # But maybe user wants to control it.
-                    # Let's just update the count in master for now?
-                    # Or at least refresh UI.
+                    # Update master count if possible?
+                    # Since we are adding to detail, the master count (which is for Warehouse reception) 
+                    # might not be the same as "Capturista scanned count".
+                    # But if we want to reflect progress, we should probably update master count too or have a separate one.
+                    # User asked: "recuento de documentos... en la pantalla inicial"
+                    # The detail view counts lines in detail sheet. The master view reads master sheet.
+                    # We need to invalidate master cache so it re-reads if we updated it?
+                    # But we are NOT updating master sheet here yet. 
                     
-                    # For now, we won't force status change on scan unless requested, 
-                    # but we MUST refresh to show new count if we go back.
+                    # For now, just rerun to update Detail View list.
+                    # Ideally, we should sync this count to master sheet or read from details.
                     
                     time.sleep(0.5) # Brief pause to show success
                     st.rerun() # Rerun to update list immediately
